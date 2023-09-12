@@ -11,6 +11,7 @@
 		B3000E7E2AB08FC200A45DEF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3000E7D2AB08FC200A45DEF /* ContentView.swift */; };
 		B3000E802AB08FC600A45DEF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B3000E7F2AB08FC600A45DEF /* Assets.xcassets */; };
 		B3000E832AB08FC600A45DEF /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B3000E822AB08FC600A45DEF /* Preview Assets.xcassets */; };
+		B3BAAE312AB0994E00F484E5 /* rary.a in Frameworks */ = {isa = PBXBuildFile; fileRef = B3BAAE302AB0994E00F484E5 /* rary.a */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -19,6 +20,8 @@
 		B3000E7D2AB08FC200A45DEF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		B3000E7F2AB08FC600A45DEF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		B3000E822AB08FC600A45DEF /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		B3000E892AB0923700A45DEF /* iOS-microbench-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "iOS-microbench-Bridging-Header.h"; sourceTree = "<group>"; };
+		B3BAAE302AB0994E00F484E5 /* rary.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = rary.a; path = ../rary.a; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -26,6 +29,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B3BAAE312AB0994E00F484E5 /* rary.a in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -37,6 +41,7 @@
 			children = (
 				B3000E7A2AB08FC200A45DEF /* iOS-microbench */,
 				B3000E792AB08FC200A45DEF /* Products */,
+				B3BAAE2F2AB0994E00F484E5 /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -51,6 +56,7 @@
 		B3000E7A2AB08FC200A45DEF /* iOS-microbench */ = {
 			isa = PBXGroup;
 			children = (
+				B3000E892AB0923700A45DEF /* iOS-microbench-Bridging-Header.h */,
 				B3000E7B2AB08FC200A45DEF /* iOS_microbenchApp.swift */,
 				B3000E7D2AB08FC200A45DEF /* ContentView.swift */,
 				B3000E7F2AB08FC600A45DEF /* Assets.xcassets */,
@@ -65,6 +71,14 @@
 				B3000E822AB08FC600A45DEF /* Preview Assets.xcassets */,
 			);
 			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		B3BAAE2F2AB0994E00F484E5 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				B3BAAE302AB0994E00F484E5 /* rary.a */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -283,6 +297,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "junjie1475.iOS-microbench";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "iOS-microbench/iOS-microbench-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -312,6 +327,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = "junjie1475.iOS-microbench";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "iOS-microbench/iOS-microbench-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
