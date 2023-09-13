@@ -33,8 +33,8 @@ struct proc_threadcounts {
 #define PROC_PIDTHREADCOUNTS_SIZE (sizeof(struct proc_threadcounts))
 int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize);
 
-static int its = 8192;
-static int outer_its = 64;
+static int its = 8192 * 4 * 2;
+static int outer_its = 64 * 2;
 static int unroll = 1; // TODO
 const char *delim = "\t";
 
@@ -113,6 +113,16 @@ static int add_prep(uint32_t *ibuf, int instr_type) {
     for (int i = 0; i < 32; i++)
       ibuf[o++] = 0x4ea11c20 | i; // mov.16b vi, v1
     break;
+  case 15:
+      {
+          ibuf[o++] = 0xaa0003fa; // mov x26, x0
+          ibuf[o++] = 0xaa0203fb; // mov x27, x2
+          ibuf[o++] = 0xaa0403fc; // mov x28, x4
+          ibuf[o++] = 0xaa0303fd; // mov x29, x3
+          ibuf[o++] = 0xaa0103fe; // mov x30, x1
+          ibuf[o++] = 0xaa0303f1; // mov x17, x3
+          break;
+      }
   }
 
   return o;
@@ -182,6 +192,18 @@ static int add_filler(uint32_t *ibuf, int instr_type, int j) {
     ibuf[o++] = 0xeb0500bf; // cmp  x5, x5
     ibuf[o++] = 0x54000020; // b.eq .+4
     break;
+  case 14: // confused attempt to get a reoder buffer size (firestorm spike at 853)
+    if (j % 3 == 0) {
+      ibuf[o++] = 0x8B0B0165; // ADD x0, x5, x5
+    } else if (j % 3 == 1) {
+      ibuf[o++] = 0x1E60C000; // FABS d0, d0
+    } else {
+        ibuf[o++] = 0xf9000445; // STR x5 [x2]
+    }
+    break;
+  case 15:
+    ibuf[o++] = 0xf90007a5; // strb w5, [x29, #8]
+    break;
   }
 
   return o;
@@ -207,6 +229,7 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
     ibuf[o++] = 0xa90647f2; // stp	x18, x17, [sp, #96]
     ibuf[o++] = 0xa9073ff0; // stp	x16, x15, [sp, #112]
   }
+        
 
   // next, next, data1, data2, its
   // x0 = offset into data1
@@ -220,14 +243,16 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
   int start = o;
   int load_count = 1;
   for (int i = 0; i < load_count; i++)
-    ibuf[o++] = 0xf8607840; // ldr	x0, [x2, x0, lsl #3]
+      if(instr_type == 15) ibuf[o++] = 0xf87a7b7a; // ldr x26, [x27, x26, lsl #3]
+      else ibuf[o++] = 0xf8607840; // ldr	x0, [x2, x0, lsl #3]
 
   for (int j = 0; j < icount; j++) {
     o += add_filler(ibuf + o, instr_type, j);
   }
 
   for (int i = 0; i < load_count; i++)
-    ibuf[o++] = 0xf8617861; // ldr	x1, [x3, x1, lsl #3]
+    if(instr_type == 15) ibuf[o++] = 0xf87e7bbe; // ldr x30, [x29, x30, lsl #3]
+    else ibuf[o++] = 0xf8617861; // ldr	x1, [x3, x1, lsl #3]
 
   // lfence mode?
   ibuf[o++] = 0xD5033B9F; // DSB ISH
@@ -239,6 +264,7 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
   assert(off < 0 && off > -0x40000);
   ibuf[o++] = 0x54000001 | ((off & 0x7ffff) << 5); // b.ne
 
+  if(instr_type == 15) ibuf[o++] = 0xaa1a03e0; // mov x0, x26
   // epilogue
   if (instr_type == 5) {
     ibuf[o++] = 0xa9447bfd; // ldp	x29, x30, [sp, #64]
@@ -266,8 +292,8 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
 int test_entry() {
   int test_high_perf_cores = 1;
   int instr_type = 1;
-  int start_icount = 600;
-  int stop_icount = 700;
+  int start_icount = 50;
+  int stop_icount = 1000;
   int stride_icount = 1;
 
   if (test_high_perf_cores) {
@@ -278,744 +304,87 @@ int test_entry() {
 
   init_rdtsc();
   // Warm up cache and predictor
-  rdtsc();
-  rdtsc();
-  rdtsc();
+  volatile uint64_t warmup1 = rdtsc();
+  warmup1 = rdtsc();
+  warmup1 = rdtsc();
+  warmup1 = rdtsc();
+  warmup1 = rdtsc();
+  warmup1 = rdtsc();
+    
+    __asm__ volatile("isb");
+    volatile uint64_t cycle_start = rdtsc();
+    __asm__ volatile("isb");
+    __asm__ volatile("isb");
+    volatile uint64_t cycle_end = rdtsc();
+    __asm__ volatile("isb");
+
+    printf("base cycle: %llu\n", cycle_end - cycle_start);
+
     while(1) {
         __asm__ volatile("isb");
         volatile uint64_t cycle_start = rdtsc();
         __asm__ volatile("isb");
-        
+
         // test width
         int loop_count = 30000000;
         for(int i = 0; i < loop_count; i++) {
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
-            __asm__ volatile("nop");
+            __asm__ volatile (".fill 1344, 4, 0xd503201f");
         }
-        
+
         __asm__ volatile("isb");
         volatile uint64_t cycle_end = rdtsc();
         __asm__ volatile("isb");
         uint64_t cycle = cycle_end - cycle_start;
 //        printf("cycle: %llu\n", cycle);
-        printf("IPC: %f\n", 672.0 / ((double)cycle / (double)loop_count));
+        printf("IPC: %f\n", 1344.0 / ((double)cycle / (double)loop_count));
         sleep(1);
     }
-//   uint64_t *data1, *data2;
-//   init_dbufs(&data1, &data2);
-// 
-//   void *mapping = mmap(NULL, 0x400000, PROT_WRITE,
-//                        MAP_ANON | MAP_PRIVATE, -1, 0);
-//   uint32_t *ibuf = (uint32_t *)mapping;
-// 
-//   uint64_t next = 0;
-// 
-//   for (int icount = start_icount; icount <= stop_icount; icount += stride_icount) {
-//     make_routine(ibuf, icount, instr_type);
-// 
-//     uint64_t (*routine)(uint64_t, uint64_t, uint64_t *, uint64_t *, uint64_t) = (void *)ibuf;
-// 
-//     uint64_t min_diff = 0x7fffffffffffffffLL;
-//     uint64_t max_diff = 0x0;
-//     uint64_t sum_diff = 0;
-// 
-//     next = routine(next, next, data1, data2, its);
-// 
-//     for (int i = 0; i < outer_its; i++) {
-// 
-//       // in case we were on the wrong core earlier
-//       configure_rdtsc();
-// 
-//       long long start = rdtsc();
-//       next = routine(next, next, data1, data2, its);
-//       long long stop = rdtsc();
-// 
-//       uint64_t cycles = stop - start;
-// 
-//       sum_diff += cycles;
-//       if (min_diff > cycles) {
-//         min_diff = cycles;
-//       }
-//       if (max_diff < cycles) {
-//         max_diff = cycles;
-//       }
-//     }
-// 
-//     printf("%d%s%.2f%s%.2f%s%.2f\n", icount, delim,
-//            0.5 * min_diff / its / unroll, delim,
-//            0.5 * sum_diff / its / unroll / outer_its, delim,
-//            0.5 * max_diff / its / unroll);
-//   }
+    
+   uint64_t *data1, *data2;
+   init_dbufs(&data1, &data2);
+ 
+   void *mapping = mmap(NULL, 0x400000, PROT_WRITE,
+                        MAP_ANON | MAP_PRIVATE, -1, 0);
+   uint32_t *ibuf = (uint32_t *)mapping;
+ 
+   uint64_t next = 0;
+ 
+   for (int icount = start_icount; icount <= stop_icount; icount += stride_icount) {
+     make_routine(ibuf, icount, 15);
+ 
+     uint64_t (*routine)(uint64_t, uint64_t, uint64_t *, uint64_t *, uint64_t) = (void *)ibuf;
+ 
+     uint64_t min_diff = 0x7fffffffffffffffLL;
+     uint64_t max_diff = 0x0;
+     uint64_t sum_diff = 0;
+       
+     mprotect(ibuf, 0x400000, PROT_EXEC);
+     next = routine(next, next, data1, data2, its);
+ 
+     for (int i = 0; i < outer_its; i++) {
+ 
+       // in case we were on the wrong core earlier
+       configure_rdtsc();
+       long long start = rdtsc();
+       next = routine(next, next, data1, data2, its);
+       long long stop = rdtsc();
+ 
+       uint64_t cycles = stop - start;
+ 
+       sum_diff += cycles;
+       if (min_diff > cycles) {
+         min_diff = cycles;
+       } 
+       if (max_diff < cycles) {
+         max_diff = cycles;
+       }
+     }
+ 
+     printf("%d%s%.2f%s%.2f%s%.2f\n", icount, delim,
+            1.0 * min_diff / its / unroll, delim,
+            1.0 * sum_diff / its / unroll / outer_its, delim,
+            1.0 * max_diff / its / unroll);
+   }
 
   return 0;
 }
