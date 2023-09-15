@@ -9,12 +9,11 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {   
-            Button(action: {
-                test_entry();
-            }, label: {Text("Run")});
+        VStack {
         }
-        .padding()
+        .onAppear() {
+            test_entry();
+        }
     }
 }
 
