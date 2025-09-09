@@ -78,61 +78,61 @@ static int add_filler2(uint32_t *ibuf, int instr_type, int j) {
     int o = 0;
     switch (instr_type) {
         case 0:
-            if(j % 2 == 0) ADD("add v0.16b, v1.16b, v2.16b");
-            else ADD("mul v3.16b, v1.16b, v2.16b");
+            if(j % 2 == 0) ibuf[o++] = 0x4e228420;
+            else ibuf[o++] = 0x4e229c23;
             break;
         case 1:
-            if(j % 8 < 1) ADD("fcsel s2, s0, s1, gt");
-            else if(j % 8 < 6) ADD("nop");
-            else ADD("add v0.16b, v1.16b, v2.16b");
+            if(j % 8 < 1) ibuf[o++] = 0x1e21cc02;
+            else if(j % 8 < 6) ibuf[o++] = 0xd503201f;
+            else ibuf[o++] = 0x4e228420;
             break;
         case 2:
-            ADD("fcvtns w1, s0");
+            ibuf[o++] = 0x1e200001;
             break;
         case 3:
-            ADD("fdiv s3, s1, s2");
+            ibuf[o++] = 0x1e221823;
             break;
         case 4:
-            ADD("ldr x5, [x2]");
+            ibuf[o++] = 0xf9400045;
             break;
         case 5:
-            ADD("str x5, [x2, #8]");
+            ibuf[o++] = 0xf9000445;
             break;
         case 6:
-            if(j % 8 < 2) ADD("ldr x5, [x2]");
-            else if(j % 8 < 4) ADD("str x5, [x2, #8]");
-            else ADD("nop");
+            if(j % 8 < 2) ibuf[o++] = 0xf9400045;
+            else if(j % 8 < 4) ibuf[o++] = 0xf9000445;
+            else ibuf[o++] = 0xd503201f;
             break;
         case 7:
-            ADD("add x5, x11, x11");
+            ibuf[o++] = 0x8b0b0165;
             break;
         case 8:
-            ADD("mul x5, x11, x11");
+            ibuf[o++] = 0x9b0b7d65;
             break;
         case 9:
-            if(j % 8 < 2) ADD("mul x5, x11, x11");
-            else ADD("add x5, x11, x11");
+            if(j % 8 < 2) ibuf[o++] = 0x9b0b7d65;
+            else ibuf[o++] = 0x8b0b0165;
             break;
         case 10:
-            ADD("sdiv x5, x11, x11");
+            ibuf[o++] = 0x9acb0d65;
             break;
         case 11:
-            if(j % 3 < 2) ADD("mul x5, x11, x11");
-            else ADD("sdiv x5, x11, x11");
+            if(j % 3 < 2) ibuf[o++] = 0x9b0b7d65;
+            else ibuf[o++] = 0x9acb0d65;
             break;
         case 12:
-            ADD("cmp w5, w6");
+            ibuf[o++] = 0x6b0600bf;
             break;
         case 13: // ipc 4
-            if(j % 8 < 6) ADD("add x5, x11, x11");
-            else if(j % 8 < 7) ADD("sdiv x5, x11, x11");
-            else ADD("nop");
+            if(j % 8 < 6) ibuf[o++] = 0x8b0b0165;
+            else if(j % 8 < 7) ibuf[o++] = 0x9acb0d65;
+            else ibuf[o++] = 0xd503201f;
             break;
         case 14:
-            ADD("b.eq .+4");
+            ibuf[o++] = 0x54000020;
             break;
         case 15:
-            ADD("nop");
+            ibuf[o++] = 0xd503201f;
             break;
     }
     return o;
@@ -143,18 +143,18 @@ void make_routine2(uint32_t *ibuf, int icount, int instr_type) {
   mprotect(ibuf, 0x400000, PROT_WRITE);
 
   // prologue
-  ADD("stp x29, x30, [sp, #-192]!");
-  ADD("stp x28, x27, [sp, #16]");
-  ADD("stp x26, x25, [sp, #32]");
-  ADD("stp x24, x23, [sp, #48]");
-  ADD("stp x22, x21, [sp, #64]");
-  ADD("stp x20, x19, [sp, #80]");
-  ADD("stp x18, x17, [sp, #96]");
-  ADD("stp x16, x15, [sp, #112]");
-  ADD("stp d15, d14, [sp, #128]");
-  ADD("stp d13, d12, [sp, #144]");
-  ADD("stp d11, d10, [sp, #160]");
-  ADD("stp d9, d8, [sp, #176]");
+  ibuf[o++] = 0xa9b47bfd;
+  ibuf[o++] = 0xa9016ffc;
+  ibuf[o++] = 0xa90267fa;
+  ibuf[o++] = 0xa9035ff8;
+  ibuf[o++] = 0xa90457f6;
+  ibuf[o++] = 0xa9054ff4;
+  ibuf[o++] = 0xa90647f2;
+  ibuf[o++] = 0xa9073ff0;
+  ibuf[o++] = 0x6d083bef;
+  ibuf[o++] = 0x6d0933ed;
+  ibuf[o++] = 0x6d0a2beb;
+  ibuf[o++] = 0x6d0b23e9;
         
 
   // next, next, data1, data2, its
@@ -174,26 +174,26 @@ void make_routine2(uint32_t *ibuf, int icount, int instr_type) {
 
 
   // loop back to top
-  ADD("subs w4, w4, #1");
+  ibuf[o++] = 0x71000484;
   int off = start - o;
   assert(off < 0 && off > -0x40000);
   ibuf[o++] = 0x54000001 | ((off & 0x7ffff) << 5); // b.ne
 
   // epilogue
-  ADD("ldp d9, d8, [sp, #176]");
-  ADD("ldp d11, d10, [sp, #160]");
-  ADD("ldp d13, d12, [sp, #144]");
-  ADD("ldp d15, d14, [sp, #128]");
+  ibuf[o++] = 0x6d4b23e9;
+  ibuf[o++] = 0x6d4a2beb;
+  ibuf[o++] = 0x6d4933ed;
+  ibuf[o++] = 0x6d483bef;
 
-  ADD("ldp x16, x15, [sp, #112]");
-  ADD("ldp x18, x17, [sp, #96]");
-  ADD("ldp x20, x19, [sp, #80]");
-  ADD("ldp x22, x21, [sp, #64]");
-  ADD("ldp x24, x23, [sp, #48]");
-  ADD("ldp x26, x25, [sp, #32]");
-  ADD("ldp x28, x27, [sp, #16]");
-  ADD("ldp x29, x30, [sp], #192");
-  ADD("ret");
+  ibuf[o++] = 0xa9473ff0;
+  ibuf[o++] = 0xa94647f2;
+  ibuf[o++] = 0xa9454ff4;
+  ibuf[o++] = 0xa94457f6;
+  ibuf[o++] = 0xa9435ff8;
+  ibuf[o++] = 0xa94267fa;
+  ibuf[o++] = 0xa9416ffc;
+  ibuf[o++] = 0xa8cc7bfd;
+  ibuf[o++] = 0xd65f03c0;
 
 
   mprotect(ibuf, 0x400000, PROT_WRITE);
