@@ -31,12 +31,11 @@ struct proc_threadcounts {
 #define PROC_PIDTHREADCOUNTS_SIZE (sizeof(struct proc_threadcounts))
 int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int buffersize);
 
-static int its = 8192 * 4;
-static int outer_its = 64 * 4;
+static int its = 8192;
+static int outer_its = 64;
 static int unroll = 1; // TODO
-const char *delim = "\t";
+const char *delim = ",\t";
 
-#define FILL_INSTR 3000
 
 struct proc_threadcounts *rbuf;
 pid_t pid;
@@ -59,6 +58,8 @@ static unsigned long long int rdtsc() {
   uint64_t cycle = p->ptcd_cycles;
   return cycle;
 }
+
+
 
 static int add_prep2(uint32_t *ibuf) {
   int o = 0;
@@ -241,11 +242,154 @@ static void init_dbufs(uint64_t **out_data1, uint64_t **out_data2) {
   free(numbers);
 }
 
+static int add_filler(uint32_t *ibuf, int instr_type, int j) {
+    int o = 0;
+  
+    // "spike" is used to mean the first icount where the minimum time had clearly
+    // jumped up
+  
+    switch (instr_type) {
+    case 0: // OOO window maximum size (firestorm spike at 2295, icestorm spike at 415)
+      ibuf[o++] = 0xd503201f; // nop
+      break;
+    case 1: // maximum in flight renames (firestorm spike at 623, icestorm spike at 111)
+      ibuf[o++] = 0xd2800005; // mov x5, 0
+      break;
+    case 2: // load buffer size (firestorm spike at 129, icestorm spike at 29 (?))
+      ibuf[o++] = 0xf9400045; // ldr x5, [x2]
+      break;
+    case 3: // store buffer size (firestorm spike at 108, icestorm spike at 36 (?))
+      ibuf[o++] = 0xf9000445; // str x5, [x2, #8]
+      break;
+    case 4: // gpr prf size (firestorm spike at 380, icestorm spike at 79)
+      ibuf[o++] = 0x8b0b0165; // add x5, x11, x11
+      break;
+    case 5: // simd/fp prf size (firestorm spike at 434, icestorm spike at 87)
+      ibuf[o++] = 0x4e228420; // add v0.16b, v1.16b, v2.16b
+      break;
+    case 6: // scheduler (rs) size (firestorm spike at 158, icestorm spike at 34)
+      ibuf[o++] = 0x8b010005; // add x5, x0, x1 (depends on pending load)
+      break;
+    case 7: // untaken branches (firestorm spike at 144, icestorm spike at 32)
+      if (j == 0)
+        ibuf[o++] = 0xeb0500bf; // cmp	x5, x5
+      ibuf[o++] = 0x54000781;   // b.ne	.+0xF0
+      break;
+    case 8: // confused attempt to get a reoder buffer size (firestorm spike at 853)
+      if (j == 0) {
+        ibuf[o++] = 0xeb0500bf; // cmp	x5, x5
+      } else if (j - 1 < 100) {
+        ibuf[o++] = 0xf9000445; // str x5, [x2, #8]
+      } else if (j - 1 - 100 < 130) {
+        ibuf[o++] = 0x54000781; // b.ne	.+0xF0
+      } else {
+        ibuf[o++] = 0xd2800005; // mov x5, 0
+      }
+      break;
+    case 9: // calls in flight (firestorm spike at 30, icestorm spike at 11)
+      ibuf[o++] = 0x94000002; // bl +8
+      ibuf[o++] = 0x14000002; // b  +8
+      ibuf[o++] = 0xd65f03c0; // ret
+      break;
+    case 10: // uncond branch (firestorm spike at 88, icestorm spike at 32)
+      ibuf[o++] = 0x14000001; // b  +4
+      break;
+    case 11: // taken branch (firestorm spike at 88, icestorm spike at 32)
+      if (j == 0)
+        ibuf[o++] = 0xeb0500bf; // cmp x5, x5
+      ibuf[o++] = 0x54000020; // b.eq .+4
+      break;
+    case 12: // not-taken compare+branch (firestorm spike at 129)
+      ibuf[o++] = 0xeb0500bf; // cmp x5, x5
+      ibuf[o++] = 0x54000021; // b.ne .+4
+      break;
+    case 13: // taken compare+branch (firestorm spike at 88)
+      ibuf[o++] = 0xeb0500bf; // cmp  x5, x5
+      ibuf[o++] = 0x54000020; // b.eq .+4
+      break;
+    }
+  
+    return o;
+  }
+
+void make_routine(uint32_t *ibuf, int icount, int instr_type) {
+    mprotect(ibuf, 0x400000, PROT_WRITE);
+    int o = 0;
+    // prologue
+    ibuf[o++] = 0xa9b47bfd;
+    ibuf[o++] = 0xa9016ffc;
+    ibuf[o++] = 0xa90267fa;
+    ibuf[o++] = 0xa9035ff8;
+    ibuf[o++] = 0xa90457f6;
+    ibuf[o++] = 0xa9054ff4;
+    ibuf[o++] = 0xa90647f2;
+    ibuf[o++] = 0xa9073ff0;
+    ibuf[o++] = 0x6d083bef;
+    ibuf[o++] = 0x6d0933ed;
+    ibuf[o++] = 0x6d0a2beb;
+    ibuf[o++] = 0x6d0b23e9;
+
+    // next, next, data1, data2, its
+    // x0 = offset into data1
+    // x1 = offset into data2
+    // x2 = data1
+    // x3 = data2
+    // x4 = its
+  
+    o += add_prep2(ibuf + o);
+  
+    int start = o;
+    // ibuf[o++] = 0xf8607840;
+    for(int i = 0; i < 10; i++)
+        ibuf[o++] = 0x1e61c000;
+
+    for (int j = 0; j < icount; j++) {
+      o += add_filler(ibuf + o, instr_type, j);
+    }
+    
+    for(int i = 0; i < 10; i++)
+        ibuf[o++] = 0x1e61c021;
+
+    // ibuf[o++] = 0xf8617861;
+
+  
+    // // lfence mode?
+    ibuf[o++] = 0xd5033b9f;
+    ibuf[o++] = 0xd5033fdf;
+
+    // loop back to top
+    ibuf[o++] = 0x71000484;
+    int off = start - o;
+    assert(off < 0 && off > -0x40000);
+    ibuf[o++] = 0x54000001 | ((off & 0x7ffff) << 5); // b.ne
+  
+    // epilogue
+    ibuf[o++] = 0x6d4b23e9;
+    ibuf[o++] = 0x6d4a2beb;
+    ibuf[o++] = 0x6d4933ed;
+    ibuf[o++] = 0x6d483bef;
+
+    ibuf[o++] = 0xa9473ff0;
+    ibuf[o++] = 0xa94647f2;
+    ibuf[o++] = 0xa9454ff4;
+    ibuf[o++] = 0xa94457f6;
+    ibuf[o++] = 0xa9435ff8;
+    ibuf[o++] = 0xa94267fa;
+    ibuf[o++] = 0xa9416ffc;
+    ibuf[o++] = 0xa8cc7bfd;
+    ibuf[o++] = 0xd65f03c0;
+  
+    mprotect(ibuf, 0x400000, PROT_WRITE);
+    sys_icache_invalidate(ibuf, o * 4);
+  }
+
+#define FILL_INSTR 3000
+
 int test_entry(int agrc, char **argv) {
   int test_high_perf_cores = 1;
   int instr_type = 1;
-  int start_icount = 15;
-  int stop_icount = 1000;
+  int start_icount = 200;
+  int stop_icount = 3000;
   int stride_icount = 1;
 
   init_rdtsc();
@@ -267,7 +411,7 @@ int test_entry(int agrc, char **argv) {
   uint64_t next = 0;
 
    for (int icount = start_icount; icount <= stop_icount; icount += stride_icount) {
-//     make_routine(ibuf, icount, 16);
+    // make_routine(ibuf, icount, 2);
      make_routine2(ibuf, FILL_INSTR, 15);
 
      uint64_t (*routine)(uint64_t, uint64_t, uint64_t *, uint64_t *, uint64_t) = (void *)ibuf;
@@ -295,15 +439,13 @@ int test_entry(int agrc, char **argv) {
          max_diff = cycles;
        }
       }
-      printf("%d%s%.2f%s%.2f%s%.2f%s%.2f%s%.2f\n", icount, delim,
+      printf("%d%s%.2f%s%.2f%s%.2f%s%.2f\n", icount, delim,
         1.0 * min_diff / its / unroll, delim,
         1.0 * sum_diff / its / unroll / outer_its, delim,
         1.0 * max_diff / its / unroll, delim,
-        (1.0 * FILL_INSTR) / (1.0 * min_diff / its/ unroll), delim,
-        (1.0 * min_diff / its/ unroll) / (FILL_INSTR / 8.0));
+        (1.0 * FILL_INSTR) / (1.0 * min_diff / its/ unroll));
     }
-    // cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DLLVM_TARGETS_TO_BUILD="AArch64;X86" -G "Unix Makefiles" ..
-
+    
   return 0;
 }
 
