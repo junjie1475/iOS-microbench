@@ -8,6 +8,8 @@
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
+#include <stdbool.h>
+#include <mach/mach.h>
 
 #include <libkern/OSCacheControl.h>
 
@@ -105,7 +107,7 @@ static int add_filler2(uint32_t *ibuf, int instr_type, int j) {
             else ibuf[o++] = 0xd503201f;
             break;
         case 7:
-            ibuf[o++] = 0x8b0b0165;
+            ibuf[o++] = 0x8a0b0166;
             break;
         case 8:
             ibuf[o++] = 0x9b0b7d65;
@@ -141,7 +143,6 @@ static int add_filler2(uint32_t *ibuf, int instr_type, int j) {
 
 void make_routine2(uint32_t *ibuf, int icount, int instr_type) {
   int o = 0;
-  mprotect(ibuf, 0x400000, PROT_WRITE);
 
   // prologue
   ibuf[o++] = 0xa9b47bfd;
@@ -197,7 +198,6 @@ void make_routine2(uint32_t *ibuf, int icount, int instr_type) {
   ibuf[o++] = 0xd65f03c0;
 
 
-  mprotect(ibuf, 0x400000, PROT_WRITE);
   sys_icache_invalidate(ibuf, o * 4);
 }
 
@@ -265,7 +265,7 @@ static int add_filler(uint32_t *ibuf, int instr_type, int j) {
       ibuf[o++] = 0x8b0b0165; // add x5, x11, x11
       break;
     case 5: // simd/fp prf size (firestorm spike at 434, icestorm spike at 87)
-      ibuf[o++] = 0x4e228420; // add v0.16b, v1.16b, v2.16b
+      ibuf[o++] = 0x1E60280A; // fadd d10, d0, d0
       break;
     case 6: // scheduler (rs) size (firestorm spike at 158, icestorm spike at 34)
       ibuf[o++] = 0x8b010005; // add x5, x0, x1 (depends on pending load)
@@ -313,7 +313,6 @@ static int add_filler(uint32_t *ibuf, int instr_type, int j) {
   }
 
 void make_routine(uint32_t *ibuf, int icount, int instr_type) {
-    mprotect(ibuf, 0x400000, PROT_WRITE);
     int o = 0;
     // prologue
     ibuf[o++] = 0xa9b47bfd;
@@ -340,20 +339,20 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
   
     int start = o;
     // ibuf[o++] = 0xf8607840;
-    for(int i = 0; i < 10; i++)
+    for(int i = 0; i < 30; i++)
         ibuf[o++] = 0x1e61c000;
 
     for (int j = 0; j < icount; j++) {
       o += add_filler(ibuf + o, instr_type, j);
     }
     
-    for(int i = 0; i < 10; i++)
+    for(int i = 0; i < 30; i++)
         ibuf[o++] = 0x1e61c021;
 
     // ibuf[o++] = 0xf8617861;
 
   
-    // // lfence mode?
+    // lfence mode?
     ibuf[o++] = 0xd5033b9f;
     ibuf[o++] = 0xd5033fdf;
 
@@ -379,16 +378,15 @@ void make_routine(uint32_t *ibuf, int icount, int instr_type) {
     ibuf[o++] = 0xa8cc7bfd;
     ibuf[o++] = 0xd65f03c0;
   
-    mprotect(ibuf, 0x400000, PROT_WRITE);
     sys_icache_invalidate(ibuf, o * 4);
   }
 
 #define FILL_INSTR 3000
-
+const int REGION_SIZE = 0x400000;
 int test_entry(int agrc, char **argv) {
   int test_high_perf_cores = 1;
   int instr_type = 1;
-  int start_icount = 200;
+  int start_icount = 100;
   int stop_icount = 3000;
   int stride_icount = 1;
 
@@ -405,22 +403,59 @@ int test_entry(int agrc, char **argv) {
     pthread_set_qos_class_self_np(QOS_CLASS_BACKGROUND, 0);
   }
 
-  void *mapping = mmap(NULL, 0x400000, PROT_WRITE,
-                        MAP_ANON | MAP_PRIVATE, -1, 0);
-   uint32_t *ibuf = (uint32_t *)mapping;
+  void* page = mmap(
+    0, REGION_SIZE, PROT_READ | PROT_EXEC, MAP_ANON | MAP_PRIVATE, -1, 0);
+
+    vm_address_t buf_rw = (vm_address_t)page;
+    vm_address_t buf_rx = 0;
+
+    vm_prot_t cur_prot, max_prot;
+
+    kern_return_t ret = vm_remap(mach_task_self(), &buf_rx, REGION_SIZE, 0,
+        VM_FLAGS_ANYWHERE, mach_task_self(), buf_rw, false, &cur_prot,
+        &max_prot, VM_INHERIT_NONE);
+    if (ret != KERN_SUCCESS) {
+        fprintf(stderr, "Failed to remap RX region %d\n", ret);
+        return 1;
+    }
+
+    // Protect region as RX
+    ret = vm_protect(mach_task_self(), buf_rx, REGION_SIZE, false,
+        VM_PROT_READ | VM_PROT_EXECUTE);
+    if (ret != KERN_SUCCESS) {
+        fprintf(stderr, "Failed to set RX protection %d\n", ret);
+        return 1;
+    }
+
+    // Make executable region a debug map
+    // You just need to have the debugger write to any pages you want to JIT i.e. "mem w buf_rx 0"
+    // TIP: Here is a nice script you can insert into Xcode's breakpoint box
+    // script lldb.target.process.WriteMemory(int(lldb.frame.FindVariable("buf_rx").GetValue()), b'\x00' * int(lldb.frame.module.FindFirstGlobalVariable(lldb.target, "REGION_SIZE").GetValue()), lldb.SBError())
+
+
+    // Protect region as RW
+    ret = vm_protect(mach_task_self(), buf_rw, REGION_SIZE, false,
+        VM_PROT_READ | VM_PROT_WRITE);
+    if (ret != KERN_SUCCESS) {
+        fprintf(stderr, "Failed to set RW protection %d\n", ret);
+        return 1;
+    }
+
+
+   uint32_t *ibuf = (uint32_t *)buf_rw;
   uint64_t next = 0;
 
    for (int icount = start_icount; icount <= stop_icount; icount += stride_icount) {
-    // make_routine(ibuf, icount, 2);
-     make_routine2(ibuf, FILL_INSTR, 15);
+    make_routine(ibuf, icount, 5);
+    //  make_routine2(ibuf, FILL_INSTR, 7);
 
-     uint64_t (*routine)(uint64_t, uint64_t, uint64_t *, uint64_t *, uint64_t) = (void *)ibuf;
+     uint64_t (*routine)(uint64_t, uint64_t, uint64_t *, uint64_t *, uint64_t) = (void *)buf_rx;
 
      uint64_t min_diff = 0x7fffffffffffffffLL;
      uint64_t max_diff = 0x0;
      uint64_t sum_diff = 0;
 
-     mprotect(ibuf, 0x400000, PROT_EXEC);
+
      next = routine(next, next, data1, data2, its);
 
      for (int i = 0; i < outer_its; i++) {
@@ -448,4 +483,3 @@ int test_entry(int agrc, char **argv) {
     
   return 0;
 }
-

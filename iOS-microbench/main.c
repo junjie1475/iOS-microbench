@@ -37,4 +37,5 @@ int test_entry() {
         return -1;
       }
     printf("%x\n", convert("add x1, x2, x3"));
+    return 0;
 }
